@@ -31,7 +31,16 @@ def parsePubMedArticles(xmlFile):
         pagination = article.findtext('MedlineCitation/Article/Pagination/MedlinePgn')                      #Pagination
         abstract = article.findtext('MedlineCitation/Article/Abstract/AbstractText')                        #Abstract
 
-       
+
+        #Concatenate all abstract sections
+        abstract = ""
+        abstractSections = article.findall('MedlineCitation/Article/Abstract/AbstractText')
+        for section in abstractSections:
+            abstract += (section.text or "") + " "
+        abstract = abstract.strip()
+
+
+
         #Create list for author forenames and affilations
         authorForeNames = []
         authorAffiliations = []
@@ -42,20 +51,27 @@ def parsePubMedArticles(xmlFile):
             affiliation = author.findtext('AffiliationInfo/Affiliation')
             if foreName:
                 authorForeNames.append(foreName)
-            if affiliation:
-                authorAffiliations.append(affiliation)
+            authorAffiliations.append(affiliation if affiliation else '¶')
         
+        authorForeNameStr = ';'.join(authorForeNames)
+        authorAffiliationsStr = '¶'.join(authorAffiliations)
         
 
         pubType = article.findtext('MedlineCitation/Article/PublicationTypeList/PublicationType')         #Publication Type
-        pubMedRec = article.findtext('PubmedData/History/PubMedPubDate[@PubStatus="received"]/Year')      #PubMedPubDate (received)
-        pubMedAcc = article.findtext('PubmedData/History/PubMedPubDate[@PubStatus="accepted"]/Year')      #PubMedPubDate (accepted)
+        
+        
+        pubMedRecDate = article.find('PubmedData/History/PubMedPubDate[@PubStatus="received"]')      #PubMedPubDate (received)
+        pubMedRec = f"{pubMedRecDate.findtext('Year')}-{pubMedRecDate.findtext('Month')}-{pubMedRecDate.findtext('Day')}" if pubMedRecDate is not None else ''
+ 
+        pubMedAccDate = article.find('PubmedData/History/PubMedPubDate[@PubStatus="accepted"]')      #PubMedPubDate (accepted)
+        pubMedAcc = f"{pubMedAccDate.findtext('Year')}-{pubMedAccDate.findtext('Month')}-{pubMedAccDate.findtext('Day')}" if pubMedAccDate is not None else ''
+
 
         # Create list for the article data gathered
         articleData = [
             pmid, pubDateYear, journalTitle, journalIso, articleTitle,
-            pagination, abstract, ";".join(authorForeNames),
-            ";".join(authorAffiliations), pubType, pubMedRec, pubMedAcc
+            pagination, abstract, authorForeNameStr,
+            authorAffiliationsStr, pubType, pubMedRec, pubMedAcc
         ]
 
         if journalTitle not in journalsData:
@@ -65,6 +81,12 @@ def parsePubMedArticles(xmlFile):
 
     return journalsData
 
+
+# Function used to create an abbreviation for the output tsv file name
+def abbreviateFileName(title):
+    words = re.split(r'\W+', title)
+    abbreviation = ''.join(word[0].upper() for word in words if word)
+    return abbreviation
 
 # Function used to clean a file's name to avoid file name inconsistencies/conflicts
 def cleanFileName(name):
@@ -97,7 +119,8 @@ def main():
 
     #Clean journal/article name and write data to tsv file 
     for journalTitle, articles in journalsData.items():
-        cleanName = cleanFileName(journalTitle)
+        abbreviation = abbreviateFileName(journalTitle)
+        cleanName = cleanFileName(abbreviation)
         tsvFile= f'{cleanName}.tsv'
         writeToTsv(tsvFile, articles)
 
