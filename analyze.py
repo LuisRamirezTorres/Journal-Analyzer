@@ -3,6 +3,7 @@ import shutil
 import xml.etree.ElementTree as ET
 import csv
 import re
+from datetime import datetime
 
 # Function used to excract .gz file and copy over to .xml file to be able to parse data
 def extractGzipToXml(gzip_file, xmlFile):
@@ -51,42 +52,47 @@ def parsePubMedArticles(xmlFile):
             affiliation = author.findtext('AffiliationInfo/Affiliation')
             if foreName:
                 authorForeNames.append(foreName)
-            authorAffiliations.append(affiliation if affiliation else '¶')
+            authorAffiliations.append(affiliation if affiliation else '0')
         
         authorForeNameStr = ';'.join(authorForeNames)
         authorAffiliationsStr = '¶'.join(authorAffiliations)
         
 
-        pubType = article.findtext('MedlineCitation/Article/PublicationTypeList/PublicationType')         #Publication Type
+        pubType = article.findtext('MedlineCitation/Article/PublicationTypeList/PublicationType')           #Publication Type
+
+                                                                                                            #PubMed received and accepted dates
+        pubMedRecDate = article.find('PubmedData/History/PubMedPubDate[@PubStatus="received"]')
+        pubMedRec = None
+        if pubMedRecDate is not None:
+            pubMedRec = f"{pubMedRecDate.findtext('Year')}-{pubMedRecDate.findtext('Month')}-{pubMedRecDate.findtext('Day')}"
         
+        pubMedAccDate = article.find('PubmedData/History/PubMedPubDate[@PubStatus="accepted"]')
+        pubMedAcc = None
+        if pubMedAccDate is not None:
+            pubMedAcc = f"{pubMedAccDate.findtext('Year')}-{pubMedAccDate.findtext('Month')}-{pubMedAccDate.findtext('Day')}"
         
-        pubMedRecDate = article.find('PubmedData/History/PubMedPubDate[@PubStatus="received"]')      #PubMedPubDate (received)
-        pubMedRec = f"{pubMedRecDate.findtext('Year')}-{pubMedRecDate.findtext('Month')}-{pubMedRecDate.findtext('Day')}" if pubMedRecDate is not None else ''
- 
-        pubMedAccDate = article.find('PubmedData/History/PubMedPubDate[@PubStatus="accepted"]')      #PubMedPubDate (accepted)
-        pubMedAcc = f"{pubMedAccDate.findtext('Year')}-{pubMedAccDate.findtext('Month')}-{pubMedAccDate.findtext('Day')}" if pubMedAccDate is not None else ''
+        timeUnderReview = None
+        if pubMedRec and pubMedAcc:
+            recDate = datetime.strptime(pubMedRec, '%Y-%m-%d')
+            accDate = datetime.strptime(pubMedAcc, '%Y-%m-%d')
+            timeUnderReview = (accDate - recDate).days
 
 
         # Create list for the article data gathered
         articleData = [
             pmid, pubDateYear, journalTitle, journalIso, articleTitle,
             pagination, abstract, authorForeNameStr,
-            authorAffiliationsStr, pubType, pubMedRec, pubMedAcc
+            authorAffiliationsStr, pubType, pubMedRec, pubMedAcc, timeUnderReview
         ]
 
-        if journalTitle not in journalsData:
-            journalsData[journalTitle] = []
+        if journalIso not in journalsData:
+            journalsData[journalIso] = []
         
-        journalsData[journalTitle].append(articleData)
+        journalsData[journalIso].append(articleData)
 
     return journalsData
 
 
-# Function used to create an abbreviation for the output tsv file name
-def abbreviateFileName(title):
-    words = re.split(r'\W+', title)
-    abbreviation = ''.join(word[0].upper() for word in words if word)
-    return abbreviation
 
 # Function used to clean a file's name to avoid file name inconsistencies/conflicts
 def cleanFileName(name):
@@ -101,7 +107,7 @@ def cleanFileName(name):
 def writeToTsv(fileName, data):
     tsvHeader = ['PMID', 'PubDateYear', 'JournalTitle', 'JournalIso',
                   'ArticleTitle', 'Pagination', 'Abstract', 'AuthorForeNames',
-                  'AuthorAffiliations', 'PublicationType', 'PubMedPubDate(received)', 'PubMedPubDate(accepted)']
+                  'AuthorAffiliations', 'PublicationType', 'PubMedPubDate(received)', 'PubMedPubDate(accepted)', 'TimeUnderReview (days)']
     
     #open tsv file 
     with open(fileName, 'w', newline='', encoding='utf-8') as tsvFile:
@@ -118,9 +124,8 @@ def main():
     
 
     #Clean journal/article name and write data to tsv file 
-    for journalTitle, articles in journalsData.items():
-        abbreviation = abbreviateFileName(journalTitle)
-        cleanName = cleanFileName(abbreviation)
+    for journalIso, articles in journalsData.items():
+        cleanName = cleanFileName(journalIso)
         tsvFile= f'{cleanName}.tsv'
         writeToTsv(tsvFile, articles)
 
