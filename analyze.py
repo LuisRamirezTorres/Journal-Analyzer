@@ -6,10 +6,72 @@ import re
 from datetime import datetime
 
 # Function used to excract .gz file and copy over to .xml file to be able to parse data
-def extractGzipToXml(gzip_file, xmlFile):
-    with gzip.open(gzip_file, 'rb') as fin:
+def extractGzipToXml(gzipFile, xmlFile):
+    with gzip.open(gzipFile, 'rb') as fin:
         with open(xmlFile, 'wb') as fout:
             shutil.copyfileobj(fin, fout)
+
+
+# Load the name-gender dataset into a dictionary
+def loadGenderData(filePath):
+    genderCount = {}
+    with open(filePath, 'r', encoding='utf-8') as file:
+        reader = csv.reader(file)
+        next(reader)  # Skip the header row
+        for row in reader:
+            name = row[0].strip().lower()
+            gender = row[1].strip()
+            count = int(row[2].strip())
+            genderCount[(name, gender)] = count
+    return genderCount
+
+gender_count = loadGenderData('name_gender_dataset.csv')
+
+# Function to clean the name similar to the Perl script created by Dr. David Alvarez-Ponce
+def cleanName(name):
+    name = re.sub(r'[\"áàäâã]', 'a', name)
+    name = re.sub(r'[éèëê]', 'e', name)
+    name = re.sub(r'[íìïî]', 'i', name)
+    name = re.sub(r'[óòöôø]', 'o', name)
+    name = re.sub(r'[úùüû]', 'u', name)
+    name = re.sub(r'[ÁÀÄÂÅ]', 'A', name)
+    name = re.sub(r'[ÉÈËÊ]', 'E', name)
+    name = re.sub(r'[ÍÌÏÎ]', 'I', name)
+    name = re.sub(r'[ÓÒÖÔØ]', 'O', name)
+    name = re.sub(r'[ÚÙÜÛ]', 'U', name)
+    name = re.sub(r'š', 's', name)
+    name = re.sub(r'ñ', 'n', name)
+    name = re.sub(r'ç', 'c', name)
+    name = name.lower()
+    
+    nameParts = name.split()
+    for part in nameParts:
+        if '.' not in part and len(part) != 1:
+            return part
+    return name
+
+
+
+# Function to determine the gender of a name
+def determineGender(name):
+    name = cleanName(name)
+    
+    out = "?"
+    male_count = gender_count.get((name, "M"), 0)
+    female_count = gender_count.get((name, "F"), 0)
+    
+    if male_count > 0 and female_count == 0:
+        out = "M"
+    elif female_count > 0 and male_count == 0:
+        out = "F"
+    elif male_count > 0 and female_count > 0:
+        out = "U"
+        if male_count / (male_count + female_count) > 2 / 3:
+            out = "M"
+        elif female_count / (male_count + female_count) > 2 / 3:
+            out = "F"
+    
+    return out
 
 # Function used to parse the PubMedArticles
 def parsePubMedArticles(xmlFile):
@@ -42,17 +104,47 @@ def parsePubMedArticles(xmlFile):
 
 
 
-        #Create list for author forenames and affilations
+        #Create list for author forenames, affiliations and gender
         authorForeNames = []
         authorAffiliations = []
+        authorGenders = []
 
-        #For every author found in the articles, collect forenames and affiliations
-        for author in article.findall('MedlineCitation/Article/AuthorList/Author'):
+        # Initialize author gender counters
+        numberFemaleAuthors = 0
+        numberMaleAuthors = 0
+        numberUnisexAuthors = 0
+        numberUnknownAuthors = 0
+        genderFirstAuthor = None
+        genderLastCorrespondingAuthor = None
+        
+         # For every author found in the articles, collect forenames and affiliations
+        for idx, author in enumerate(article.findall('MedlineCitation/Article/AuthorList/Author')):
             foreName = author.findtext('ForeName')
             affiliation = author.findtext('AffiliationInfo/Affiliation')
             if foreName:
                 authorForeNames.append(foreName)
+                gender = determineGender(foreName)
+                authorGenders.append(gender)
+                if idx == 0:
+                    genderFirstAuthor = gender
+                if "@" in (affiliation or ""):
+                    genderLastCorrespondingAuthor = gender
+
+                if gender == "F":
+                    numberFemaleAuthors += 1
+                elif gender == "M":
+                    numberMaleAuthors += 1
+                elif gender == "U":
+                    numberUnisexAuthors += 1
+                else:
+                    numberUnknownAuthors += 1
+            else:
+                numberUnknownAuthors += 1
+
             authorAffiliations.append(affiliation if affiliation else '0')
+        
+        if genderLastCorrespondingAuthor is None and authorGenders:
+            genderLastCorrespondingAuthor = authorGenders[-1]
         
         authorForeNameStr = ';'.join(authorForeNames)
         authorAffiliationsStr = '¶'.join(authorAffiliations)
@@ -82,7 +174,9 @@ def parsePubMedArticles(xmlFile):
         articleData = [
             pmid, pubDateYear, journalTitle, journalIso, articleTitle,
             pagination, abstract, authorForeNameStr,
-            authorAffiliationsStr, pubType, pubMedRec, pubMedAcc, timeUnderReview
+            authorAffiliationsStr, genderFirstAuthor, genderLastCorrespondingAuthor,
+            numberFemaleAuthors, numberMaleAuthors, numberUnisexAuthors, 
+            numberUnknownAuthors, pubType, pubMedRec, pubMedAcc, timeUnderReview
         ]
 
         if journalIso not in journalsData:
@@ -107,7 +201,9 @@ def cleanFileName(name):
 def writeToTsv(fileName, data):
     tsvHeader = ['PMID', 'PubDateYear', 'JournalTitle', 'JournalIso',
                   'ArticleTitle', 'Pagination', 'Abstract', 'AuthorForeNames',
-                  'AuthorAffiliations', 'PublicationType', 'PubMedPubDate(received)', 'PubMedPubDate(accepted)', 'TimeUnderReview (days)']
+                  'AuthorAffiliations', 'GenderFirstAuthor', 'GenderLastCorrespondingAuthor',
+                  'NumberFemalAuthors', 'NumberMaleAuthors', 'NumberUnisexAuthor', 
+                  'NumberUnknownAuthors', 'PublicationType', 'PubMedPubDate(received)', 'PubMedPubDate(accepted)', 'TimeUnderReview (days)']
     
     #open tsv file 
     with open(fileName, 'w', newline='', encoding='utf-8') as tsvFile:
