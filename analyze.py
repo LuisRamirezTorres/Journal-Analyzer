@@ -92,15 +92,12 @@ def parsePubMedArticles(xmlFile):
         journalIso = article.findtext('MedlineCitation/Article/Journal/ISOAbbreviation')                    #ISO
         articleTitle = article.findtext('MedlineCitation/Article/ArticleTitle')                             #Article Title
         pagination = article.findtext('MedlineCitation/Article/Pagination/MedlinePgn')                      #Pagination
-        abstract = article.findtext('MedlineCitation/Article/Abstract/AbstractText')                        #Abstract
+        
 
+         # Concatenate all abstract sections using itertext()
+        abstract_sections = article.findall('MedlineCitation/Article/Abstract/AbstractText')
+        abstract = ' '.join(''.join(section.itertext()).strip() for section in abstract_sections)
 
-        #Concatenate all abstract sections
-        abstract = ""
-        abstractSections = article.findall('MedlineCitation/Article/Abstract/AbstractText')
-        for section in abstractSections:
-            abstract += (section.text or "") + " "
-        abstract = abstract.strip()
 
 
 
@@ -114,8 +111,9 @@ def parsePubMedArticles(xmlFile):
         numberMaleAuthors = 0
         numberUnisexAuthors = 0
         numberUnknownAuthors = 0
+        fractionFemaleAuthors = "NA"
         genderFirstAuthor = None
-        genderLastCorrespondingAuthor = None
+        genderLastCorrespondingAuthor = "NA"
         
          # For every author found in the articles, collect forenames and affiliations
         for idx, author in enumerate(article.findall('MedlineCitation/Article/AuthorList/Author')):
@@ -143,8 +141,10 @@ def parsePubMedArticles(xmlFile):
 
             authorAffiliations.append(affiliation if affiliation else '0')
         
-        if genderLastCorrespondingAuthor is None and authorGenders:
-            genderLastCorrespondingAuthor = authorGenders[-1]
+        if numberFemaleAuthors + numberMaleAuthors > 0:
+            fractionFemaleAuthors = numberFemaleAuthors / (numberFemaleAuthors + numberMaleAuthors)
+        else:
+            fractionFemaleAuthors = "NA"
         
         authorForeNameStr = ';'.join(authorForeNames)
         authorAffiliationsStr = '¶'.join(authorAffiliations)
@@ -176,7 +176,7 @@ def parsePubMedArticles(xmlFile):
             pagination, abstract, authorForeNameStr,
             authorAffiliationsStr, genderFirstAuthor, genderLastCorrespondingAuthor,
             numberFemaleAuthors, numberMaleAuthors, numberUnisexAuthors, 
-            numberUnknownAuthors, pubType, pubMedRec, pubMedAcc, timeUnderReview
+            numberUnknownAuthors, fractionFemaleAuthors, pubType, pubMedRec, pubMedAcc, timeUnderReview
         ]
 
         if journalIso not in journalsData:
@@ -202,8 +202,9 @@ def writeToTsv(fileName, data):
     tsvHeader = ['PMID', 'PubDateYear', 'JournalTitle', 'JournalIso',
                   'ArticleTitle', 'Pagination', 'Abstract', 'AuthorForeNames',
                   'AuthorAffiliations', 'GenderFirstAuthor', 'GenderLastCorrespondingAuthor',
-                  'NumberFemalAuthors', 'NumberMaleAuthors', 'NumberUnisexAuthor', 
-                  'NumberUnknownAuthors', 'PublicationType', 'PubMedPubDate(received)', 'PubMedPubDate(accepted)', 'TimeUnderReview (days)']
+                  'NumberFemaleAuthors', 'NumberMaleAuthors', 'NumberUnisexAuthor', 
+                  'NumberUnknownAuthors', 'FractionFemaleAuthors', 'PublicationType', 
+                  'PubMedPubDate(received)', 'PubMedPubDate(accepted)', 'TimeUnderReview (days)']
     
     #open tsv file 
     with open(fileName, 'w', newline='', encoding='utf-8') as tsvFile:
