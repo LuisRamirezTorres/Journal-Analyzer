@@ -4,6 +4,7 @@ import xml.etree.ElementTree as ET
 import csv
 import re
 from datetime import datetime
+from textatistic import Textatistic
 
 # Function used to excract .gz file and copy over to .xml file to be able to parse data
 def extractGzipToXml(gzipFile, xmlFile):
@@ -98,6 +99,16 @@ def parsePubMedArticles(xmlFile):
         abstract_sections = article.findall('MedlineCitation/Article/Abstract/AbstractText')
         abstract = ' '.join(''.join(section.itertext()).strip() for section in abstract_sections)
 
+        if abstract:
+            scores = Textatistic(abstract)
+            daleChallScore = scores.dalechall_score
+            fleschScore = scores.flesch_score
+            fleschKinCaidScore = scores.fleschkincaid_score
+            gunningFogScore = scores.gunningfog_score
+            smogScore = scores.smog_score
+        else: 
+            daleChallScore = fleschScore = fleschKinCaidScore = gunningFogScore = smogScore = "NA"
+            
 
 
 
@@ -176,7 +187,8 @@ def parsePubMedArticles(xmlFile):
             pagination, abstract, authorForeNameStr,
             authorAffiliationsStr, genderFirstAuthor, genderLastCorrespondingAuthor,
             numberFemaleAuthors, numberMaleAuthors, numberUnisexAuthors, 
-            numberUnknownAuthors, fractionFemaleAuthors, pubType, pubMedRec, pubMedAcc, timeUnderReview
+            numberUnknownAuthors, fractionFemaleAuthors, pubType, pubMedRec, pubMedAcc, timeUnderReview,
+            daleChallScore, fleschScore, fleschKinCaidScore, gunningFogScore, smogScore
         ]
 
         if journalIso not in journalsData:
@@ -199,12 +211,13 @@ def cleanFileName(name):
 
 # Function used to write data out to a .tsv file
 def writeToTsv(fileName, data):
-    tsvHeader = ['PMID', 'PubDateYear', 'JournalTitle', 'JournalIso',
-                  'ArticleTitle', 'Pagination', 'Abstract', 'AuthorForeNames',
-                  'AuthorAffiliations', 'GenderFirstAuthor', 'GenderLastCorrespondingAuthor',
+    tsvHeader = ['PMID', 'PubDateYear', 'JournalTitle', 'JournalIso', 
+                  'ArticleTitle', 'Pagination', 'Abstract', 'AuthorForeNames', 
+                  'AuthorAffiliations', 'GenderFirstAuthor', 'GenderLastCorrespondingAuthor', 
                   'NumberFemaleAuthors', 'NumberMaleAuthors', 'NumberUnisexAuthor', 
                   'NumberUnknownAuthors', 'FractionFemaleAuthors', 'PublicationType', 
-                  'PubMedPubDate(received)', 'PubMedPubDate(accepted)', 'TimeUnderReview (days)']
+                  'PubMedPubDate(received)', 'PubMedPubDate(accepted)', 'TimeUnderReview(days)' 
+                  'DaleChallScore', 'FleschScore', 'FleschKinCaidScore', 'GunningFogScore', 'SmogScore']
     
     #open tsv file 
     with open(fileName, 'w', newline='', encoding='utf-8') as tsvFile:
