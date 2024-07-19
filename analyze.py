@@ -5,6 +5,7 @@ import csv
 import re
 from datetime import datetime
 from textatistic import Textatistic
+import pycountry
 
 # Function used to excract .gz file and copy over to .xml file to be able to parse data
 def extractGzipToXml(gzipFile, xmlFile):
@@ -74,6 +75,89 @@ def determineGender(name):
     
     return out
 
+# Prepare a list of country names and their common variations using pycountry
+def getCountryVariations():
+    country_variations = {}
+    for country in pycountry.countries:
+        country_variations[country.name.lower()] = country.name
+        if hasattr(country, 'official_name'):
+            country_variations[country.official_name.lower()] = country.name
+        for name in getattr(country, 'common_name', []):
+            country_variations[name.lower()] = country.name
+
+    # Add common variations and missing country names manually
+    additional_countries = {
+        'usa': 'United States', 'united states': 'United States', 'united states of america': 'United States',
+        'uk': 'United Kingdom', 'united kingdom': 'United Kingdom', 'england': 'United Kingdom', 'great britain': 'United Kingdom',
+        'south korea': 'South Korea', 'republic of korea': 'South Korea', 'korea': 'South Korea',
+        'north korea': 'North Korea', 'democratic people\'s republic of korea': 'North Korea',
+        'russia': 'Russia', 'russian federation': 'Russia',
+        'iran': 'Iran', 'islamic republic of iran': 'Iran',
+        'hong kong': 'Hong Kong', 'hong kong sar': 'Hong Kong',
+        'taiwan': 'Taiwan', 'republic of china': 'Taiwan',
+        'czech republic': 'Czechia', 'czechia': 'Czechia',
+        'slovak republic': 'Slovakia', 'slovakia': 'Slovakia',
+        'turkey': 'Turkey',  # Explicitly adding Turkey
+        'vatican city': 'Vatican City', 'holy see': 'Vatican City',
+        'macau': 'Macau', 'macao': 'Macau'
+    }
+
+    country_variations.update(additional_countries)
+
+    return country_variations
+
+country_variations = getCountryVariations()
+
+
+# Function to clean the affiliation string by removing punctuation marks
+def cleanAffiliation(affiliation):
+    return re.sub(r'[^\w\s]', '', affiliation)
+
+
+# Function to find the country in an affiliation string
+def findCountry(affiliation):
+    if not affiliation:
+        return "NA"
+    clean_affiliation = cleanAffiliation(affiliation)
+    words = re.split(r'[\s]+', clean_affiliation.lower())
+    for word in reversed(words):
+        if word in country_variations:
+            return country_variations[word]
+    return "NA"
+
+# Function to calculate the number of pages based on pagination
+def calculatePages(pagination):
+    if not pagination or '-' not in pagination:
+        return "NA"
+    
+    # Check for multiple ranges/values and discard if present
+    if ',' in pagination or ';' in pagination or ' ' in pagination:
+        return "NA"
+    
+    # Remove everything after '.' if it exists
+    pagination = pagination.split('.')[0]
+
+    # Remove letters and special characters
+    pagination = re.sub(r'[^\d\-]', '', pagination)
+
+    # Split the pagination by '-' and ensure there are exactly two values
+    parts = pagination.split('-')
+    if len(parts) != 2:
+        return "NA"
+
+    start_page, end_page = parts
+    try:
+        # Handle cases like 1378-88
+        if len(start_page) > len(end_page):
+            end_page = start_page[:len(start_page)-len(end_page)] + end_page
+
+        start_page = int(start_page)
+        end_page = int(end_page)
+
+        return end_page - start_page + 1
+    except ValueError:
+        return "NA"
+
 # Function used to parse the PubMedArticles
 def parsePubMedArticles(xmlFile):
     # Parse xml file using ElementTree library
@@ -93,7 +177,7 @@ def parsePubMedArticles(xmlFile):
         journalIso = article.findtext('MedlineCitation/Article/Journal/ISOAbbreviation')                    #ISO
         articleTitle = article.findtext('MedlineCitation/Article/ArticleTitle')                             #Article Title
         pagination = article.findtext('MedlineCitation/Article/Pagination/MedlinePgn')                      #Pagination
-        
+        numPages = calculatePages(pagination)
 
          # Concatenate all abstract sections using itertext()
         abstract_sections = article.findall('MedlineCitation/Article/Abstract/AbstractText')
@@ -125,6 +209,8 @@ def parsePubMedArticles(xmlFile):
         fractionFemaleAuthors = "NA"
         genderFirstAuthor = None
         genderLastCorrespondingAuthor = "NA"
+        countryFirstAuthor = "NA"
+        countryLastCorrespondingAuthor = "NA"
         
          # For every author found in the articles, collect forenames and affiliations
         for idx, author in enumerate(article.findall('MedlineCitation/Article/AuthorList/Author')):
@@ -134,10 +220,13 @@ def parsePubMedArticles(xmlFile):
                 authorForeNames.append(foreName)
                 gender = determineGender(foreName)
                 authorGenders.append(gender)
+                country = findCountry(affiliation)
                 if idx == 0:
                     genderFirstAuthor = gender
+                    countryFirstAuthor = country
                 if "@" in (affiliation or ""):
                     genderLastCorrespondingAuthor = gender
+                    countryLastCorrespondingAuthor = country
 
                 if gender == "F":
                     numberFemaleAuthors += 1
@@ -186,9 +275,10 @@ def parsePubMedArticles(xmlFile):
             pmid, pubDateYear, journalTitle, journalIso, articleTitle,
             pagination, abstract, authorForeNameStr,
             authorAffiliationsStr, genderFirstAuthor, genderLastCorrespondingAuthor,
+            countryFirstAuthor, countryLastCorrespondingAuthor,
             numberFemaleAuthors, numberMaleAuthors, numberUnisexAuthors, 
             numberUnknownAuthors, fractionFemaleAuthors, pubType, pubMedRec, pubMedAcc, timeUnderReview,
-            daleChallScore, fleschScore, fleschKinCaidScore, gunningFogScore, smogScore
+            daleChallScore, fleschScore, fleschKinCaidScore, gunningFogScore, smogScore, numPages
         ]
 
         if journalIso not in journalsData:
@@ -214,10 +304,11 @@ def writeToTsv(fileName, data):
     tsvHeader = ['PMID', 'PubDateYear', 'JournalTitle', 'JournalIso', 
                   'ArticleTitle', 'Pagination', 'Abstract', 'AuthorForeNames', 
                   'AuthorAffiliations', 'GenderFirstAuthor', 'GenderLastCorrespondingAuthor', 
+                  'CountryFirstAuthor', 'CountryLastCorrespondingAuthor', 
                   'NumberFemaleAuthors', 'NumberMaleAuthors', 'NumberUnisexAuthor', 
                   'NumberUnknownAuthors', 'FractionFemaleAuthors', 'PublicationType', 
                   'PubMedPubDate(received)', 'PubMedPubDate(accepted)', 'TimeUnderReview(days)' 
-                  'DaleChallScore', 'FleschScore', 'FleschKinCaidScore', 'GunningFogScore', 'SmogScore']
+                  'DaleChallScore', 'FleschScore', 'FleschKinCaidScore', 'GunningFogScore', 'SmogScore', 'numberOfPages' ]
     
     #open tsv file 
     with open(fileName, 'w', newline='', encoding='utf-8') as tsvFile:
