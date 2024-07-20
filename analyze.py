@@ -6,6 +6,7 @@ import re
 from datetime import datetime
 from textatistic import Textatistic
 import pycountry
+import glob
 
 # Function used to excract .gz file and copy over to .xml file to be able to parse data
 def extractGzipToXml(gzipFile, xmlFile):
@@ -158,6 +159,15 @@ def calculatePages(pagination):
     except ValueError:
         return "NA"
 
+# Ensure the abstract ends with proper punctuation
+def ensureProperPunctuation(abstract):
+    # Check for common abbreviations that might cause issues
+    if re.search(r'\b(?:etc|i\.e|e\.g)\.$', abstract.strip()):
+        abstract += '.'
+    elif abstract and not re.match(r'.*[\.\!\?\"\'”’]$', abstract.strip()):
+        abstract += '.'
+    return abstract
+
 # Function used to parse the PubMedArticles
 def parsePubMedArticles(xmlFile):
     # Parse xml file using ElementTree library
@@ -179,19 +189,23 @@ def parsePubMedArticles(xmlFile):
         pagination = article.findtext('MedlineCitation/Article/Pagination/MedlinePgn')                      #Pagination
         numPages = calculatePages(pagination)
 
-         # Concatenate all abstract sections using itertext()
+        # Concatenate all abstract sections using itertext()
         abstract_sections = article.findall('MedlineCitation/Article/Abstract/AbstractText')
         abstract = ' '.join(''.join(section.itertext()).strip() for section in abstract_sections)
 
-        if abstract:
+        if not abstract:
+            abstract = "NA"
+
+        if abstract == "NA":
+            daleChallScore = fleschScore = fleschKinCaidScore = gunningFogScore = smogScore = "NA"
+        else:
+            abstract = ensureProperPunctuation(abstract) 
             scores = Textatistic(abstract)
             daleChallScore = scores.dalechall_score
             fleschScore = scores.flesch_score
             fleschKinCaidScore = scores.fleschkincaid_score
             gunningFogScore = scores.gunningfog_score
             smogScore = scores.smog_score
-        else: 
-            daleChallScore = fleschScore = fleschKinCaidScore = gunningFogScore = smogScore = "NA"
             
 
 
@@ -273,12 +287,12 @@ def parsePubMedArticles(xmlFile):
         # Create list for the article data gathered
         articleData = [
             pmid, pubDateYear, journalTitle, journalIso, articleTitle,
-            pagination, abstract, authorForeNameStr,
+            pagination, numPages, abstract, authorForeNameStr,
             authorAffiliationsStr, genderFirstAuthor, genderLastCorrespondingAuthor,
             countryFirstAuthor, countryLastCorrespondingAuthor,
             numberFemaleAuthors, numberMaleAuthors, numberUnisexAuthors, 
             numberUnknownAuthors, fractionFemaleAuthors, pubType, pubMedRec, pubMedAcc, timeUnderReview,
-            daleChallScore, fleschScore, fleschKinCaidScore, gunningFogScore, smogScore, numPages
+            daleChallScore, fleschScore, fleschKinCaidScore, gunningFogScore, smogScore,
         ]
 
         if journalIso not in journalsData:
@@ -302,7 +316,7 @@ def cleanFileName(name):
 # Function used to write data out to a .tsv file
 def writeToTsv(fileName, data):
     tsvHeader = ['PMID', 'PubDateYear', 'JournalTitle', 'JournalIso', 
-                  'ArticleTitle', 'Pagination', 'Abstract', 'AuthorForeNames', 
+                  'ArticleTitle', 'Pagination', 'NumPages', 'Abstract', 'AuthorForeNames', 
                   'AuthorAffiliations', 'GenderFirstAuthor', 'GenderLastCorrespondingAuthor', 
                   'CountryFirstAuthor', 'CountryLastCorrespondingAuthor', 
                   'NumberFemaleAuthors', 'NumberMaleAuthors', 'NumberUnisexAuthor', 
@@ -317,18 +331,17 @@ def writeToTsv(fileName, data):
         tsvWriter.writerows(data)                                       # Write rows
 
 def main():
-    gzipFile = 'pubmed24n1219.xml.gz'                                   #Gz file we want to unzip
-    xmlFile = 'myfile.xml'                                              #xml file we want to output xml data to 
+   for gzipFile in glob.glob('pubmed24n*.xml.gz'):
+        xmlFile = gzipFile.replace('.xml.gz', '.xml')
 
-    extractGzipToXml(gzipFile, xmlFile)                                 #extract and convert to xml
-    journalsData = parsePubMedArticles(xmlFile)                         #parse the xml file
-    
-
-    #Clean journal/article name and write data to tsv file 
-    for journalIso, articles in journalsData.items():
-        cleanName = cleanFileName(journalIso)
-        tsvFile= f'{cleanName}.tsv'
-        writeToTsv(tsvFile, articles)
+        extractGzipToXml(gzipFile, xmlFile)                                 # Extract and convert to xml
+        journalsData = parsePubMedArticles(xmlFile)                         # Parse the xml file
+        
+        # Clean journal/article name and write data to tsv file 
+        for journalIso, articles in journalsData.items():
+            cleanName = cleanFileName(journalIso)
+            tsvFile= f'{cleanName}.tsv'
+            writeToTsv(tsvFile, articles)
 
 if __name__ == "__main__":
     main()
