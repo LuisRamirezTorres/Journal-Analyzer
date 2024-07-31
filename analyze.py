@@ -7,6 +7,9 @@ from datetime import datetime
 from textatistic import Textatistic
 import pycountry
 import glob
+from timeit import default_timer as timer
+from datetime import timedelta
+#import tensorflow as tf
 
 # Function used to excract .gz file and copy over to .xml file to be able to parse data
 def extractGzipToXml(gzipFile, xmlFile):
@@ -57,34 +60,39 @@ def cleanName(name):
 
 # Function to determine the gender of a name
 def determineGender(name):
+    if name == "":
+        return "-"
+    if re.match(r'\.|^\w$', name):
+        return "I"
+    
     name = cleanName(name)
     
     out = "?"
-    male_count = gender_count.get((name, "M"), 0)
-    female_count = gender_count.get((name, "F"), 0)
+    maleCount = gender_count.get((name, "M"), 0)
+    femaleCount = gender_count.get((name, "F"), 0)
     
-    if male_count > 0 and female_count == 0:
+    if maleCount > 0 and femaleCount == 0:
         out = "M"
-    elif female_count > 0 and male_count == 0:
+    elif femaleCount > 0 and maleCount == 0:
         out = "F"
-    elif male_count > 0 and female_count > 0:
+    elif maleCount > 0 and femaleCount > 0:
         out = "U"
-        if male_count / (male_count + female_count) > 2 / 3:
+        if maleCount / (maleCount + femaleCount) > 2 / 3:
             out = "M"
-        elif female_count / (male_count + female_count) > 2 / 3:
+        elif femaleCount / (maleCount + femaleCount) > 2 / 3:
             out = "F"
     
     return out
 
 # Prepare a list of country names and their common variations using pycountry
 def getCountryVariations():
-    country_variations = {}
+    countryVariations = {}
     for country in pycountry.countries:
-        country_variations[country.name.lower()] = country.name
+        countryVariations[country.name.lower()] = country.name
         if hasattr(country, 'official_name'):
-            country_variations[country.official_name.lower()] = country.name
+            countryVariations[country.official_name.lower()] = country.name
         for name in getattr(country, 'common_name', []):
-            country_variations[name.lower()] = country.name
+            countryVariations[name.lower()] = country.name
 
     # Add common variations and missing country names manually
     additional_countries = {
@@ -103,9 +111,9 @@ def getCountryVariations():
         'macau': 'Macau', 'macao': 'Macau'
     }
 
-    country_variations.update(additional_countries)
+    countryVariations.update(additional_countries)
 
-    return country_variations
+    return countryVariations
 
 country_variations = getCountryVariations()
 
@@ -118,12 +126,17 @@ def cleanAffiliation(affiliation):
 # Function to find the country in an affiliation string
 def findCountry(affiliation):
     if not affiliation:
-        return "NA"
+        return "NA" 
     clean_affiliation = cleanAffiliation(affiliation)
     words = re.split(r'[\s]+', clean_affiliation.lower())
-    for word in reversed(words):
-        if word in country_variations:
-            return country_variations[word]
+
+    # Check for multi-word country names
+    for i in range(len(words)):
+        for j in range(i + 1, len(words) + 1):
+            phrase = ' '.join(words[i:j])
+            if phrase in country_variations:
+                return country_variations[phrase]
+
     return "NA"
 
 # Function to calculate the number of pages based on pagination
@@ -199,13 +212,17 @@ def parsePubMedArticles(xmlFile):
         if abstract == "NA":
             daleChallScore = fleschScore = fleschKinCaidScore = gunningFogScore = smogScore = "NA"
         else:
-            abstract = ensureProperPunctuation(abstract) 
-            scores = Textatistic(abstract)
-            daleChallScore = scores.dalechall_score
-            fleschScore = scores.flesch_score
-            fleschKinCaidScore = scores.fleschkincaid_score
-            gunningFogScore = scores.gunningfog_score
-            smogScore = scores.smog_score
+            try:    
+                abstract = ensureProperPunctuation(abstract) 
+                scores = Textatistic(abstract)
+                daleChallScore = scores.dalechall_score
+                fleschScore = scores.flesch_score
+                fleschKinCaidScore = scores.fleschkincaid_score
+                gunningFogScore = scores.gunningfog_score
+                smogScore = scores.smog_score
+            except Exception as e:
+                daleChallScore = fleschScore = fleschKinCaidScore = gunningFogScore = smogScore = "NA"
+                print(e)
             
 
 
@@ -331,7 +348,19 @@ def writeToTsv(fileName, data):
         tsvWriter.writerows(data)                                       # Write rows
 
 def main():
-   for gzipFile in glob.glob('pubmed24n*.xml.gz'):
+
+    #gpus = tf.config.list_physical_devices('GPU')
+    #if gpus:
+    #    try:
+    #        for gpu in gpus:
+    #            tf.config.experimental.set_memory_growth(gpu, True)
+    #            logical_gpus = tf.config.list_logical_devices('GPU')
+    #            print(len(gpus), "Physical GPUs,", len(logical_gpus), "Logical GPUs")
+    #    except RuntimeError as e:
+    #        print(e)
+    
+    #start = timer()
+    for gzipFile in glob.glob('pubmed24n*.xml.gz'):
         xmlFile = gzipFile.replace('.xml.gz', '.xml')
 
         extractGzipToXml(gzipFile, xmlFile)                                 # Extract and convert to xml
@@ -342,6 +371,8 @@ def main():
             cleanName = cleanFileName(journalIso)
             tsvFile= f'{cleanName}.tsv'
             writeToTsv(tsvFile, articles)
+    #end = timer()
+    #print(timedelta(seconds=end-start))
 
 if __name__ == "__main__":
     main()
