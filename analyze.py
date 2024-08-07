@@ -9,7 +9,9 @@ import pycountry
 import glob
 from timeit import default_timer as timer
 from datetime import timedelta
-#import tensorflow as tf
+from numba import jit
+import os
+import time
 
 # Function used to excract .gz file and copy over to .xml file to be able to parse data
 def extractGzipToXml(gzipFile, xmlFile):
@@ -63,6 +65,8 @@ def determineGender(name):
     if name == "":
         return "-"
     if re.match(r'\.|^\w$', name):
+        return "I"
+    if all(char.isupper() or char.isspace() or char == '-' for char in name):
         return "I"
     
     name = cleanName(name)
@@ -217,6 +221,10 @@ def ensureProperPunctuation(abstract):
         abstract += '.'
     return abstract
 
+@jit(nopython = True)
+def getTextTest(abstract):
+    return Textatistic(abstract)
+
 # Function used to parse the PubMedArticles
 def parsePubMedArticles(xmlFile):
     # Parse xml file using ElementTree library
@@ -225,7 +233,7 @@ def parsePubMedArticles(xmlFile):
 
     
     
-    journalsData = {}  
+    journalsData = {}
 
 
     # For every article found in the xml file, collect the data we want
@@ -240,7 +248,7 @@ def parsePubMedArticles(xmlFile):
 
         # Concatenate all abstract sections using itertext()
         abstract_sections = article.findall('MedlineCitation/Article/Abstract/AbstractText')
-        abstract = ' '.join(''.join(section.itertext()).strip() for section in abstract_sections)
+        abstract = ' '.join(ET.tostring(section, encoding='unicode', method='text').strip() for section in abstract_sections)
 
         if not abstract:
             abstract = "NA"
@@ -250,7 +258,7 @@ def parsePubMedArticles(xmlFile):
         else:
             try:    
                 abstract = ensureProperPunctuation(abstract) 
-                scores = Textatistic(abstract)
+                scores = getTextTest(abstract)
                 daleChallScore = scores.dalechall_score
                 fleschScore = scores.flesch_score
                 fleschKinCaidScore = scores.fleschkincaid_score
@@ -258,7 +266,9 @@ def parsePubMedArticles(xmlFile):
                 smogScore = scores.smog_score
             except Exception as e:
                 daleChallScore = fleschScore = fleschKinCaidScore = gunningFogScore = smogScore = "NA"
-                print(e)
+                
+                
+
             
 
 
@@ -291,6 +301,9 @@ def parsePubMedArticles(xmlFile):
                 if idx == 0:
                     genderFirstAuthor = gender
                     countryFirstAuthor = country
+                if idx == len(article.findall('MedlineCitation/Article/AuthorList/Author')) - 1:
+                    genderLastAuthor = gender
+                    countryLastAuthor = country
                 if "@" in (affiliation or ""):
                     genderLastCorrespondingAuthor = gender
                     countryLastCorrespondingAuthor = country
@@ -332,17 +345,20 @@ def parsePubMedArticles(xmlFile):
         
         timeUnderReview = None
         if pubMedRec and pubMedAcc:
-            recDate = datetime.strptime(pubMedRec, '%Y-%m-%d')
-            accDate = datetime.strptime(pubMedAcc, '%Y-%m-%d')
-            timeUnderReview = (accDate - recDate).days
+            try:
+                recDate = datetime.strptime(pubMedRec, '%Y-%m-%d')
+                accDate = datetime.strptime(pubMedAcc, '%Y-%m-%d')
+                timeUnderReview = (accDate - recDate).days
+            except ValueError as e:
+                timeUnderReview = "NA"
 
 
         # Create list for the article data gathered
         articleData = [
             pmid, pubDateYear, journalTitle, journalIso, articleTitle,
             pagination, numPages, abstract, authorForeNameStr,
-            authorAffiliationsStr, genderFirstAuthor, genderLastCorrespondingAuthor,
-            countryFirstAuthor, countryLastCorrespondingAuthor,
+            authorAffiliationsStr, genderFirstAuthor, genderLastAuthor, genderLastCorrespondingAuthor,
+            countryFirstAuthor, countryLastAuthor, countryLastCorrespondingAuthor,
             numberFemaleAuthors, numberMaleAuthors, numberUnisexAuthors, 
             numberUnknownAuthors, fractionFemaleAuthors, pubType, pubMedRec, pubMedAcc, timeUnderReview,
             daleChallScore, fleschScore, fleschKinCaidScore, gunningFogScore, smogScore,
@@ -359,6 +375,8 @@ def parsePubMedArticles(xmlFile):
 
 # Function used to clean a file's name to avoid file name inconsistencies/conflicts
 def cleanFileName(name):
+    # Ensure the input is a string
+    name = str(name)
     # Replace invalid characters with underscores
     cleanName = re.sub(r'[<>:"/\\|?*]', '_', name)
     cleanName = cleanName.replace(' ', '_')
@@ -370,45 +388,62 @@ def cleanFileName(name):
 def writeToTsv(fileName, data):
     tsvHeader = ['PMID', 'PubDateYear', 'JournalTitle', 'JournalIso', 
                   'ArticleTitle', 'Pagination', 'NumPages', 'Abstract', 'AuthorForeNames', 
-                  'AuthorAffiliations', 'GenderFirstAuthor', 'GenderLastCorrespondingAuthor', 
-                  'CountryFirstAuthor', 'CountryLastCorrespondingAuthor', 
+                  'AuthorAffiliations', 'GenderFirstAuthor', 'GenderLastAuthor', 'GenderLastCorrespondingAuthor', 
+                  'CountryFirstAuthor', 'CountryLastAuthor', 'CountryLastCorrespondingAuthor', 
                   'NumberFemaleAuthors', 'NumberMaleAuthors', 'NumberUnisexAuthor', 
                   'NumberUnknownAuthors', 'FractionFemaleAuthors', 'PublicationType', 
-                  'PubMedPubDate(received)', 'PubMedPubDate(accepted)', 'TimeUnderReview(days)' 
+                  'PubMedPubDate(received)', 'PubMedPubDate(accepted)', 'TimeUnderReview(days)', 
                   'DaleChallScore', 'FleschScore', 'FleschKinCaidScore', 'GunningFogScore', 'SmogScore', 'numberOfPages' ]
     
-    #open tsv file 
+    file_exists = os.path.isfile(fileName)
+
+    # Open tsv file in append mode if it exists, otherwise write mode
+    with open(fileName, 'a' if file_exists else 'w', newline='', encoding='utf-8') as tsvFile:
+        tsvWriter = csv.writer(tsvFile, delimiter='\t')
+        if not file_exists:
+            tsvWriter.writerow(tsvHeader)  # Write header if file does not exist
+        tsvWriter.writerows(data)  # Write rows
+
+
+# Function to write problematic abstracts to a TSV file
+def writeProblematicAbstracts(fileName, data):
+    tsvHeader = ['PMID', 'Abstract', 'JournalISO']
+    # Open tsv file 
     with open(fileName, 'w', newline='', encoding='utf-8') as tsvFile:
         tsvWriter = csv.writer(tsvFile, delimiter='\t')
-        tsvWriter.writerow(tsvHeader)                                   # Write header
-        tsvWriter.writerows(data)                                       # Write rows
+        tsvWriter.writerow(tsvHeader)  # Write header
+        tsvWriter.writerows(data)  # Write rows
 
 def main():
 
-#    gpus = tf.config.list_physical_devices('GPU')
-#    if gpus:
-#        try:
-#            for gpu in gpus:
-#                tf.config.experimental.set_memory_growth(gpu, True)
-#                logical_gpus = tf.config.list_logical_devices('GPU')
-#                print(len(gpus), "Physical GPUs,", len(logical_gpus), "Logical GPUs")
-#        except RuntimeError as e:
-#            print(e)
     
-#   start = timer()
-    for gzipFile in glob.glob('pubmed24n*.xml.gz'):
+    start = timer()
+
+    for gzipFile in glob.glob('./xmlFiles/pubmed24n*.xml.gz'):
         xmlFile = gzipFile.replace('.xml.gz', '.xml')
 
         extractGzipToXml(gzipFile, xmlFile)                                 # Extract and convert to xml
-        journalsData = parsePubMedArticles(xmlFile)                         # Parse the xml file
         
+        t1 = time.time()
+
+        journalsData = parsePubMedArticles(xmlFile)                         # Parse the xml file
+
+        t2 = time.time()
+        print("Total time to parse " + xmlFile + ": " + str(t2-t1))
+
+        t3 = time.time()
         # Clean journal/article name and write data to tsv file 
         for journalIso, articles in journalsData.items():
             cleanName = cleanFileName(journalIso)
-            tsvFile= f'{cleanName}.tsv'
+            tsvFile= f'./tsvFiles/{cleanName}.tsv'
             writeToTsv(tsvFile, articles)
-#    end = timer()
-#    print(timedelta(seconds=end-start))
+
+        t4 = time.time()
+        print("Total time to write to .tsv files: " + str(t4-t3))
+        os.remove(xmlFile)
+
+    end = timer()
+    print("Total time for script to run: " + str(timedelta(seconds=end-start)))
 
 if __name__ == "__main__":
     main()
