@@ -23,72 +23,67 @@ def extractGzipToXml(gzipFile, xmlFile):
             shutil.copyfileobj(fin, fout)
 
 
-# Load the name-gender dataset into a dictionary
+# Load the gender data into dictionaries
 def loadGenderData(filePath):
-    genderCount = {}
+    gender_data = {}
     with open(filePath, 'r', encoding='utf-8') as file:
         reader = csv.reader(file)
         next(reader)  # Skip the header row
         for row in reader:
             name = row[0].strip().lower()
-            gender = row[1].strip()
-            count = int(row[2].strip())
-            genderCount[(name, gender)] = count
-    return genderCount
+            gender = row[1].strip().lower()
+            prob = float(row[2].strip())
+            gender_data[name] = (gender, prob)
+    return gender_data
 
-gender_count = loadGenderData('name_gender_dataset.csv')
+# Load the genderize.io data
+gender_data = loadGenderData('output_genderize.csv')
 
-# Function to clean the name similar to the Perl script created by Dr. David Alvarez-Ponce
-def cleanName(name):
-    name = re.sub(r'[\"áàäâã]', 'a', name)
+# Function to determine the gender of a name based on the genderize data
+def determineGender(name):
+    if not name:
+        return "-"
+
+    name = re.sub(r'\s.+', '', name)  # Keep only the first word
+    name = re.sub(r'[\"\>\`\´]', '', name)  # Remove specific punctuation marks
+    name = re.sub(r'^\-', '', name)  # Remove leading hyphens
+
+    # Convert special characters to normal characters
+    name = re.sub(r'[áàäâã]', 'a', name)
     name = re.sub(r'[éèëê]', 'e', name)
     name = re.sub(r'[íìïî]', 'i', name)
-    name = re.sub(r'[óòöôø]', 'o', name)
+    name = re.sub(r'[óòöôõø]', 'o', name)
     name = re.sub(r'[úùüû]', 'u', name)
-    name = re.sub(r'[ÁÀÄÂÅ]', 'A', name)
+    name = re.sub(r'[ÁÀÄÂÃÅ]', 'A', name)
     name = re.sub(r'[ÉÈËÊ]', 'E', name)
     name = re.sub(r'[ÍÌÏÎ]', 'I', name)
-    name = re.sub(r'[ÓÒÖÔØ]', 'O', name)
+    name = re.sub(r'[ÓÒÖÔÕØ]', 'O', name)
     name = re.sub(r'[ÚÙÜÛ]', 'U', name)
     name = re.sub(r'š', 's', name)
+    name = re.sub(r'Š', 'S', name)
     name = re.sub(r'ñ', 'n', name)
+    name = re.sub(r'Ñ', 'N', name)
     name = re.sub(r'ç', 'c', name)
-    name = name.lower()
-    
-    nameParts = name.split()
-    for part in nameParts:
-        if '.' not in part and len(part) != 1:
-            return part
-    return name
+    name = re.sub(r'Ç', 'C', name)
 
-
-
-# Function to determine the gender of a name
-def determineGender(name):
+    # Default output for various conditions
+    out = "?"
     if name == "":
         return "-"
-    if re.match(r'\.|^\w$', name):
+    if re.search(r'\.|^\w$', name) or (not re.search(r'[a-z]', name) and len(name) < 4):
         return "I"
-    if all(char.isupper() or char.isspace() or char == '-' for char in name):
-        return "I"
-    
-    name = cleanName(name)
-    
-    out = "?"
-    maleCount = gender_count.get((name, "M"), 0)
-    femaleCount = gender_count.get((name, "F"), 0)
-    
-    if maleCount > 0 and femaleCount == 0:
-        out = "M"
-    elif femaleCount > 0 and maleCount == 0:
-        out = "F"
-    elif maleCount > 0 and femaleCount > 0:
-        out = "U"
-        if maleCount / (maleCount + femaleCount) > 2 / 3:
+
+    # Look up gender and probability
+    name = name.lower()  # Convert to lowercase
+    if name in gender_data:
+        gender, prob = gender_data[name]
+        if gender == "male" and prob >= 0.9:
             out = "M"
-        elif femaleCount / (maleCount + femaleCount) > 2 / 3:
+        elif gender == "female" and prob >= 0.9:
             out = "F"
-    
+        elif gender in ["male", "female"] and prob < 0.9:
+            out = "U"
+
     return out
 
 # Prepare a list of country names and their common variations using pycountry
@@ -256,9 +251,9 @@ def ensureProperPunctuation(abstract):
         abstract += '.'
     return abstract
 
-@jit(nopython = True)
-def getTextTest(abstract):
-    return Textatistic(abstract)
+#@jit(nopython = True)
+#def getTextTest(abstract):
+#    return Textatistic(abstract)
 
 # Function used to parse the PubMedArticles
 def parsePubMedArticles(xmlFile):
@@ -293,7 +288,7 @@ def parsePubMedArticles(xmlFile):
         else:
             try:    
                 abstract = ensureProperPunctuation(abstract) 
-                scores = getTextTest(abstract)
+                scores = Textatistic(abstract)
                 daleChallScore = scores.dalechall_score
                 fleschScore = scores.flesch_score
                 fleschKinCaidScore = scores.fleschkincaid_score
@@ -319,7 +314,7 @@ def parsePubMedArticles(xmlFile):
         numberUnisexAuthors = 0
         numberUnknownAuthors = 0  
         fractionFemaleAuthors = "NA"
-        genderFirstAuthor = None
+        genderFirstAuthor = "NA"
         genderLastAuthor = "NA"
         genderLastCorrespondingAuthor = "NA"
         countryFirstAuthor = "NA"
@@ -430,7 +425,7 @@ def writeToTsv(fileName, data):
                   'NumberFemaleAuthors', 'NumberMaleAuthors', 'NumberUnisexAuthor', 
                   'NumberUnknownAuthors', 'FractionFemaleAuthors', 'PublicationType', 
                   'PubMedPubDate(received)', 'PubMedPubDate(accepted)', 'TimeUnderReview(days)', 
-                  'DaleChallScore', 'FleschScore', 'FleschKinCaidScore', 'GunningFogScore', 'SmogScore', 'numberOfPages' ]
+                  'DaleChallScore', 'FleschScore', 'FleschKinCaidScore', 'GunningFogScore', 'SmogScore']
     
     file_exists = os.path.isfile(fileName)
 
